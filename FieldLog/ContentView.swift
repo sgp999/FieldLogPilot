@@ -24,8 +24,39 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     func requestLocation() {
-        manager.requestWhenInUseAuthorization()
-        manager.requestLocation()
+        let status = manager.authorizationStatus
+
+        switch status {
+        case .notDetermined:
+            locationStatus = "Requesting permission..."
+            manager.requestWhenInUseAuthorization()
+
+        case .authorizedWhenInUse, .authorizedAlways:
+            locationStatus = "Getting location..."
+            manager.requestLocation()
+
+        case .denied, .restricted:
+            locationStatus = "Location access denied"
+
+        @unknown default:
+            locationStatus = "Unknown status"
+        }
+    }
+
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        DispatchQueue.main.async {
+            switch manager.authorizationStatus {
+            case .authorizedWhenInUse, .authorizedAlways:
+                self.locationStatus = ""
+                manager.requestLocation()
+            case .denied, .restricted:
+                self.locationStatus = "Location access denied"
+            case .notDetermined:
+                self.locationStatus = "Location permission not decided"
+            @unknown default:
+                self.locationStatus = "Unknown status"
+            }
+        }
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
@@ -34,7 +65,7 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
         DispatchQueue.main.async {
             self.latitude = location.coordinate.latitude
             self.longitude = location.coordinate.longitude
-            self.locationStatus = "Lat: \(location.coordinate.latitude), Lng: \(location.coordinate.longitude)"
+            self.locationStatus = ""
         }
     }
 
@@ -42,11 +73,10 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
         DispatchQueue.main.async {
             self.locationStatus = "Unable to get location"
         }
-        print("Location error: \(error.localizedDescription)")
     }
 }
 
-// MARK: - Main App
+// MARK: - Main View
 struct ContentView: View {
     @State private var currentScreen: AppScreen = .login
 
@@ -88,6 +118,8 @@ struct ContentView: View {
                 ActiveShiftScreen(
                     assignmentName: assignmentName,
                     shiftStartTime: shiftStartTime,
+                    startLatitude: startLatitude,
+                    startLongitude: startLongitude,
                     onEndShift: {
                         currentScreen = .endShift
                     },
@@ -121,7 +153,6 @@ struct LoginScreen: View {
 
     var body: some View {
         VStack(spacing: 18) {
-
             Text("Pierog Detective Agency")
                 .font(.title2)
                 .fontWeight(.semibold)
@@ -184,6 +215,9 @@ struct StartShiftScreen: View {
                             .resizable()
                             .scaledToFit()
                             .frame(height: 150)
+                    } else {
+                        Text("No photo taken")
+                            .foregroundColor(.secondary)
                     }
 
                     Button("Take Odometer Photo") {
@@ -192,12 +226,36 @@ struct StartShiftScreen: View {
                     }
                 }
 
-                Section(header: Text("Location")) {
-                    Text(locationManager.locationStatus)
-
+                Section(header: Text("Current Location")) {
                     Button("Get Location") {
                         focusedField = false
                         locationManager.requestLocation()
+                    }
+
+                    if let lat = locationManager.latitude,
+                       let lon = locationManager.longitude {
+                        HStack {
+                            Text("Lat:")
+                                .fontWeight(.semibold)
+                            Text("\(lat, specifier: "%.6f")")
+
+                            Spacer()
+
+                            Text("Lon:")
+                                .fontWeight(.semibold)
+                            Text("\(lon, specifier: "%.6f")")
+                        }
+                        .font(.subheadline)
+                    } else {
+                        Text("Location not selected yet")
+                            .foregroundColor(.secondary)
+                            .font(.subheadline)
+                    }
+
+                    if !locationManager.locationStatus.isEmpty {
+                        Text(locationManager.locationStatus)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
                     }
                 }
 
@@ -205,7 +263,11 @@ struct StartShiftScreen: View {
                     focusedField = false
                     onStartShift(locationManager.latitude, locationManager.longitude)
                 }
-                .disabled(odometerImage == nil || locationManager.latitude == nil)
+                .disabled(
+                    odometerImage == nil ||
+                    locationManager.latitude == nil ||
+                    locationManager.longitude == nil
+                )
             }
 
             Button("Log Out") {
@@ -214,7 +276,9 @@ struct StartShiftScreen: View {
             .foregroundColor(.red)
             .padding()
         }
-        .sheet(isPresented: $showCamera) {
+        .sheet(isPresented: $showCamera, onDismiss: {
+            focusedField = false
+        }) {
             ImagePicker(selectedImage: $odometerImage)
         }
     }
@@ -224,13 +288,18 @@ struct StartShiftScreen: View {
 struct ActiveShiftScreen: View {
     let assignmentName: String
     let shiftStartTime: Date
+    let startLatitude: Double?
+    let startLongitude: Double?
 
     var onEndShift: () -> Void
     var onLogout: () -> Void
 
     @State private var photos: [UIImage] = []
     @State private var showCamera = false
+    @State private var latestPhoto: UIImage?
     @State private var noteText = ""
+
+    @FocusState private var notesFocused: Bool
 
     var body: some View {
         VStack {
@@ -238,49 +307,82 @@ struct ActiveShiftScreen: View {
                 Section(header: Text("Shift Info")) {
                     Text("Assignment: \(assignmentName)")
                     Text("Start: \(shiftStartTime.formatted())")
+
+                    if let lat = startLatitude, let lon = startLongitude {
+                        Text("GPS: \(lat), \(lon)")
+                    }
                 }
 
                 Section(header: Text("Photos")) {
+                    Button("Take Photo") {
+                        notesFocused = false
+                        showCamera = true
+                    }
+
                     if photos.isEmpty {
                         Text("No photos yet")
-                    }
-
-                    ForEach(photos, id: \.self) { img in
-                        Image(uiImage: img)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(height: 120)
-                    }
-
-                    Button("Take Photo") {
-                        showCamera = true
+                            .foregroundColor(.secondary)
+                    } else {
+                        ForEach(Array(photos.enumerated()), id: \.offset) { _, img in
+                            Image(uiImage: img)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(height: 120)
+                        }
                     }
                 }
 
                 Section(header: Text("Notes")) {
-                    TextField("Enter notes...", text: $noteText)
+                    ZStack(alignment: .topLeading) {
+                        if noteText.isEmpty {
+                            Text("Enter notes...")
+                                .foregroundColor(.secondary)
+                                .padding(.top, 8)
+                                .padding(.leading, 5)
+                        }
+
+                        TextEditor(text: $noteText)
+                            .frame(minHeight: 180)
+                            .padding(4)
+                            .focused($notesFocused)
+                            .scrollContentBackground(.hidden)
+                            .background(Color.clear)
+                    }
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.gray.opacity(0.4), lineWidth: 1)
+                    )
                 }
 
                 Button("End Shift") {
+                    notesFocused = false
                     onEndShift()
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
 
             Button("Log Out") {
+                notesFocused = false
                 onLogout()
             }
             .foregroundColor(.red)
             .padding()
         }
-        .sheet(isPresented: $showCamera) {
-            ImagePicker(selectedImage: Binding(
-                get: { nil },
-                set: { newImage in
-                    if let img = newImage {
-                        photos.append(img)
-                    }
+        .sheet(isPresented: $showCamera, onDismiss: {
+            if let photo = latestPhoto {
+                photos.append(photo)
+                latestPhoto = nil
+            }
+        }) {
+            ImagePicker(selectedImage: $latestPhoto)
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") {
+                    notesFocused = false
                 }
-            ))
+            }
         }
     }
 }
@@ -295,24 +397,56 @@ struct EndShiftScreen: View {
     var body: some View {
         VStack {
             Form {
-                Section(header: Text("Location")) {
-                    Text(locationManager.locationStatus)
-
+                Section(header: Text("Current Location")) {
                     Button("Get Location") {
                         locationManager.requestLocation()
                     }
+
+                    if let lat = locationManager.latitude,
+                       let lon = locationManager.longitude {
+                        HStack {
+                            Text("Lat:")
+                                .fontWeight(.semibold)
+                            Text("\(lat, specifier: "%.6f")")
+
+                            Spacer()
+
+                            Text("Lon:")
+                                .fontWeight(.semibold)
+                            Text("\(lon, specifier: "%.6f")")
+                        }
+                        .font(.subheadline)
+                    } else {
+                        Text("Location not selected yet")
+                            .foregroundColor(.secondary)
+                            .font(.subheadline)
+                    }
+
+                    if !locationManager.locationStatus.isEmpty {
+                        Text(locationManager.locationStatus)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
                 }
 
-                Button("Submit Shift") {
-                    onSubmit(locationManager.latitude, locationManager.longitude)
+                Section {
+                    Button("Submit Shift") {
+                        onSubmit(locationManager.latitude, locationManager.longitude)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .center)
                 }
+                .disabled(
+                    locationManager.latitude == nil ||
+                    locationManager.longitude == nil
+                )
             }
 
             Button("Log Out") {
                 onLogout()
             }
             .foregroundColor(.red)
-            .padding()
+            .padding(.bottom)
         }
+        .navigationTitle("End Shift")
     }
 }
