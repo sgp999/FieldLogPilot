@@ -3,10 +3,17 @@ import CoreLocation
 import Combine
 
 enum AppScreen {
+    case roleSelection
     case login
     case startShift
     case activeShift
     case endShift
+    case ownerHome
+}
+
+enum UserRole {
+    case fieldOperative
+    case owner
 }
 
 // MARK: - Location Manager
@@ -78,7 +85,8 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
 
 // MARK: - Main View
 struct ContentView: View {
-    @State private var currentScreen: AppScreen = .login
+    @State private var currentScreen: AppScreen = .roleSelection
+    @State private var selectedRole: UserRole? = nil
 
     @State private var username = ""
     @State private var password = ""
@@ -89,16 +97,36 @@ struct ContentView: View {
     @State private var startLatitude: Double?
     @State private var startLongitude: Double?
 
+    @State private var isShiftActive = false
+    @State private var shiftPhotos: [UIImage] = []
+    @State private var shiftNotes = ""
+
     var body: some View {
         NavigationStack {
             switch currentScreen {
+
+            case .roleSelection:
+                RoleSelectionScreen(
+                    onSelectFieldOperative: {
+                        selectedRole = .fieldOperative
+                        currentScreen = .login
+                    },
+                    onSelectOwner: {
+                        selectedRole = .owner
+                        currentScreen = .login
+                    }
+                )
 
             case .login:
                 LoginScreen(
                     username: $username,
                     password: $password,
                     onLogin: {
-                        currentScreen = .startShift
+                        if selectedRole == .owner {
+                            currentScreen = .ownerHome
+                        } else {
+                            currentScreen = .startShift
+                        }
                     }
                 )
 
@@ -109,6 +137,7 @@ struct ContentView: View {
                         shiftStartTime = Date()
                         startLatitude = lat
                         startLongitude = lon
+                        isShiftActive = true
                         currentScreen = .activeShift
                     },
                     onLogout: { resetApp() }
@@ -120,6 +149,8 @@ struct ContentView: View {
                     shiftStartTime: shiftStartTime,
                     startLatitude: startLatitude,
                     startLongitude: startLongitude,
+                    photos: $shiftPhotos,
+                    noteText: $shiftNotes,
                     onEndShift: {
                         currentScreen = .endShift
                     },
@@ -129,8 +160,21 @@ struct ContentView: View {
             case .endShift:
                 EndShiftScreen(
                     onSubmit: { _, _ in
+                        isShiftActive = false
                         resetApp()
                     },
+                    onLogout: { resetApp() }
+                )
+
+            case .ownerHome:
+                OwnerHomeScreen(
+                    isShiftActive: isShiftActive,
+                    assignmentName: assignmentName,
+                    shiftStartTime: shiftStartTime,
+                    latitude: startLatitude,
+                    longitude: startLongitude,
+                    photos: shiftPhotos,
+                    notes: shiftNotes,
                     onLogout: { resetApp() }
                 )
             }
@@ -141,7 +185,50 @@ struct ContentView: View {
         username = ""
         password = ""
         assignmentName = ""
-        currentScreen = .login
+        startLatitude = nil
+        startLongitude = nil
+        shiftPhotos = []
+        shiftNotes = ""
+        isShiftActive = false
+        selectedRole = nil
+        currentScreen = .roleSelection
+    }
+}
+
+// MARK: - Role Selection
+struct RoleSelectionScreen: View {
+    var onSelectFieldOperative: () -> Void
+    var onSelectOwner: () -> Void
+
+    var body: some View {
+        VStack(spacing: 18) {
+            Text("Pierog Detective Agency")
+                .font(.title2)
+                .fontWeight(.semibold)
+
+            Text("Field Log")
+                .font(.largeTitle)
+                .fontWeight(.bold)
+
+            Text("Select User Type")
+                .font(.title3)
+                .foregroundColor(.secondary)
+
+            Button("Field Operative") {
+                onSelectFieldOperative()
+            }
+            .buttonStyle(.borderedProminent)
+
+            Button("Owner") {
+                onSelectOwner()
+            }
+            .buttonStyle(.bordered)
+
+            Spacer()
+        }
+        .padding(.top, 40)
+        .padding()
+        .toolbar(.hidden, for: .navigationBar)
     }
 }
 
@@ -291,13 +378,14 @@ struct ActiveShiftScreen: View {
     let startLatitude: Double?
     let startLongitude: Double?
 
+    @Binding var photos: [UIImage]
+    @Binding var noteText: String
+
     var onEndShift: () -> Void
     var onLogout: () -> Void
 
-    @State private var photos: [UIImage] = []
     @State private var showCamera = false
     @State private var latestPhoto: UIImage?
-    @State private var noteText = ""
 
     @FocusState private var notesFocused: Bool
 
@@ -448,5 +536,110 @@ struct EndShiftScreen: View {
             .padding(.bottom)
         }
         .navigationTitle("End Shift")
+    }
+}
+
+// MARK: - Owner Screen
+struct OwnerHomeScreen: View {
+    let isShiftActive: Bool
+    let assignmentName: String
+    let shiftStartTime: Date
+    let latitude: Double?
+    let longitude: Double?
+    let photos: [UIImage]
+    let notes: String
+
+    var onLogout: () -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                Text("Owner Dashboard")
+                    .font(.largeTitle)
+                    .fontWeight(.bold)
+
+                if isShiftActive {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Status: Shift Active")
+                            .font(.headline)
+
+                        Text("Assignment: \(assignmentName)")
+                        Text("Start: \(shiftStartTime.formatted())")
+
+                        if let lat = latitude, let lon = longitude {
+                            HStack {
+                                Text("Lat:")
+                                    .fontWeight(.semibold)
+                                Text("\(lat, specifier: "%.6f")")
+
+                                Spacer()
+
+                                Text("Lon:")
+                                    .fontWeight(.semibold)
+                                Text("\(lon, specifier: "%.6f")")
+                            }
+                        } else {
+                            Text("Location not available")
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                    .background(Color(.systemGray6))
+                    .cornerRadius(12)
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Latest Photos")
+                            .font(.headline)
+
+                        if photos.isEmpty {
+                            Text("No photos yet")
+                                .foregroundColor(.secondary)
+                        } else {
+                            ForEach(Array(photos.enumerated()), id: \.offset) { _, img in
+                                Image(uiImage: img)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(maxWidth: .infinity)
+                                    .cornerRadius(10)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                    .background(Color(.systemGray6))
+                    .cornerRadius(12)
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Notes")
+                            .font(.headline)
+
+                        if notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Text("No notes yet")
+                                .foregroundColor(.secondary)
+                        } else {
+                            Text(notes)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                    .background(Color(.systemGray6))
+                    .cornerRadius(12)
+
+                } else {
+                    Text("No active shifts")
+                        .foregroundColor(.secondary)
+                        .padding(.top, 40)
+                }
+
+                Button("Log Out") {
+                    onLogout()
+                }
+                .foregroundColor(.red)
+                .padding(.top, 8)
+            }
+            .padding()
+        }
+        .navigationTitle("Owner")
     }
 }
