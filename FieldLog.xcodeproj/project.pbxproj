@@ -270,6 +270,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = FieldLog/Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "FieldLog needs camera access to take odometer and field photos.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "FieldLog needs your location to track shifts.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "FieldLog needs photo library access to attach photos to a shift.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -307,6 +308,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = FieldLog/Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "FieldLog needs camera access to take odometer and field photos.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "FieldLog needs your location to track shifts.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "FieldLog needs photo library access to attach photos to a shift.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;

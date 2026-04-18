@@ -1,13 +1,6 @@
-//
-//  ContentView.swift
-//  Content View
-//
-//  Created by Steve Pierog on 4/16/26.
-//
-
 import SwiftUI
+import CoreLocation
 import Combine
-import UIKit
 
 enum AppScreen {
     case login
@@ -16,28 +9,79 @@ enum AppScreen {
     case endShift
 }
 
+// MARK: - Location Manager
+class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
+    private let manager = CLLocationManager()
+
+    @Published var latitude: Double?
+    @Published var longitude: Double?
+    @Published var locationStatus: String = "Location not loaded"
+
+    override init() {
+        super.init()
+        manager.delegate = self
+        manager.desiredAccuracy = kCLLocationAccuracyBest
+    }
+
+    func requestLocation() {
+        manager.requestWhenInUseAuthorization()
+        manager.requestLocation()
+    }
+
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard let location = locations.first else { return }
+
+        DispatchQueue.main.async {
+            self.latitude = location.coordinate.latitude
+            self.longitude = location.coordinate.longitude
+            self.locationStatus = "Lat: \(location.coordinate.latitude), Lng: \(location.coordinate.longitude)"
+        }
+    }
+
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        DispatchQueue.main.async {
+            self.locationStatus = "Unable to get location"
+        }
+        print("Location error: \(error.localizedDescription)")
+    }
+}
+
+// MARK: - Main App
 struct ContentView: View {
     @State private var currentScreen: AppScreen = .login
+
+    @State private var username = ""
+    @State private var password = ""
+
     @State private var assignmentName = ""
-    @State private var startMileage = ""
-    @State private var endMileage = ""
     @State private var shiftStartTime = Date()
+
+    @State private var startLatitude: Double?
+    @State private var startLongitude: Double?
 
     var body: some View {
         NavigationStack {
             switch currentScreen {
+
             case .login:
-                LoginScreen {
-                    currentScreen = .startShift
-                }
+                LoginScreen(
+                    username: $username,
+                    password: $password,
+                    onLogin: {
+                        currentScreen = .startShift
+                    }
+                )
 
             case .startShift:
                 StartShiftScreen(
                     assignmentName: $assignmentName,
-                    onStartShift: {
+                    onStartShift: { lat, lon in
                         shiftStartTime = Date()
+                        startLatitude = lat
+                        startLongitude = lon
                         currentScreen = .activeShift
-                    }
+                    },
+                    onLogout: { resetApp() }
                 )
 
             case .activeShift:
@@ -47,428 +91,228 @@ struct ContentView: View {
                     onEndShift: {
                         currentScreen = .endShift
                     },
-                    onBackToLogin: {
-                        currentScreen = .login
-                    }
+                    onLogout: { resetApp() }
                 )
+
             case .endShift:
                 EndShiftScreen(
-                    onClockOut: {
-                        assignmentName = ""
-                        currentScreen = .login
-                    }
+                    onSubmit: { _, _ in
+                        resetApp()
+                    },
+                    onLogout: { resetApp() }
                 )
-           
             }
         }
     }
+
+    func resetApp() {
+        username = ""
+        password = ""
+        assignmentName = ""
+        currentScreen = .login
+    }
 }
 
+// MARK: - Login
 struct LoginScreen: View {
-    @State private var email = ""
-    @State private var password = ""
-
+    @Binding var username: String
+    @Binding var password: String
     var onLogin: () -> Void
-
-    var canLogin: Bool {
-        !email.isEmpty && !password.isEmpty
-    }
 
     var body: some View {
         VStack(spacing: 18) {
-            Spacer()
 
-            Text("FieldLog")
+            Text("Pierog Detective Agency")
+                .font(.title2)
+                .fontWeight(.semibold)
+
+            Text("Field Log")
                 .font(.largeTitle)
                 .fontWeight(.bold)
 
-            Text("Pierog Detective Agency")
-                .font(.headline)
-                .fontWeight(.bold)
+            Text("Login")
+                .font(.title3)
+                .foregroundColor(.secondary)
 
-            TextField("User Name", text: $email)
-                .textFieldStyle(.roundedBorder)
+            VStack(spacing: 16) {
+                TextField("Username", text: $username)
+                    .textFieldStyle(.roundedBorder)
 
-            SecureField("Password", text: $password)
-                .textFieldStyle(.roundedBorder)
+                SecureField("Password", text: $password)
+                    .textFieldStyle(.roundedBorder)
+            }
+            .padding(.horizontal)
 
             Button("Log In") {
-                if canLogin {
-                    onLogin()
-                }
+                onLogin()
             }
-            .frame(maxWidth: .infinity)
-            .padding()
-            .background(canLogin ? Color.blue : Color.gray)
-            .foregroundColor(.white)
-            .cornerRadius(12)
-            .disabled(!canLogin)
+            .buttonStyle(.borderedProminent)
 
             Spacer()
         }
+        .padding(.top, 40)
         .padding()
+        .toolbar(.hidden, for: .navigationBar)
     }
 }
 
+// MARK: - Start Shift
 struct StartShiftScreen: View {
     @Binding var assignmentName: String
 
-    @State private var notes = ""
+    var onStartShift: (_ lat: Double?, _ lon: Double?) -> Void
+    var onLogout: () -> Void
+
+    @StateObject private var locationManager = LocationManager()
+
+    @State private var odometerImage: UIImage?
     @State private var showCamera = false
-    @State private var odometerPhoto: UIImage?
 
-    @FocusState private var notesFocused: Bool
-    @FocusState private var fieldFocused: Bool
-
-    var onStartShift: () -> Void
-
-    var canStartShift: Bool {
-        !assignmentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        odometerPhoto != nil
-    }
+    @FocusState private var focusedField: Bool
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 20) {
-
-                // HEADER (ONLY ONE TITLE NOW)
-                Text("Start Shift")
-                    .font(.title)
-                    .fontWeight(.bold)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                // ASSIGNMENT
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Assignment")
-                        .font(.headline)
-
-                    TextField("Enter assignment name", text: $assignmentName)
-                        .textFieldStyle(.roundedBorder)
-                        .focused($fieldFocused)
+        VStack {
+            Form {
+                Section(header: Text("Assignment")) {
+                    TextField("Assignment Name", text: $assignmentName)
+                        .focused($focusedField)
                 }
 
-                // NOTES
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Notes")
-                        .font(.headline)
-
-                    ZStack(alignment: .topLeading) {
-                        if notes.isEmpty {
-                            Text("Enter notes (optional)")
-                                .foregroundColor(.gray)
-                                .padding(.top, 14)
-                                .padding(.leading, 10)
-                        }
-
-                        TextEditor(text: $notes)
-                            .frame(minHeight: 120)
-                            .padding(6)
-                            .focused($notesFocused)
-                    }
-                    .background(Color.white)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10)
-                            .stroke(Color.gray.opacity(0.5))
-                    )
-                }
-
-                // ODOMETER PHOTO
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Starting Odometer Photo")
-                        .font(.headline)
-
-                    Button(odometerPhoto == nil ? "Take Odometer Photo" : "Retake Odometer Photo") {
-                        fieldFocused = false
-                        notesFocused = false
-                        showCamera = true
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color.gray.opacity(0.15))
-                    .cornerRadius(12)
-
-                    if let image = odometerPhoto {
+                Section(header: Text("Odometer")) {
+                    if let image = odometerImage {
                         Image(uiImage: image)
                             .resizable()
                             .scaledToFit()
-                            .frame(maxHeight: 220)
-                            .cornerRadius(12)
+                            .frame(height: 150)
+                    }
+
+                    Button("Take Odometer Photo") {
+                        focusedField = false
+                        showCamera = true
                     }
                 }
 
-                // REQUIRED MESSAGE
-                if !canStartShift {
-                    Text("Assignment and odometer photo are required.")
-                        .font(.caption)
-                        .foregroundColor(.red)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                Section(header: Text("Location")) {
+                    Text(locationManager.locationStatus)
+
+                    Button("Get Location") {
+                        focusedField = false
+                        locationManager.requestLocation()
+                    }
                 }
 
-                // START BUTTON
                 Button("Start Shift") {
-                    fieldFocused = false
-                    notesFocused = false
-                    onStartShift()
+                    focusedField = false
+                    onStartShift(locationManager.latitude, locationManager.longitude)
                 }
-                .frame(maxWidth: .infinity)
-                .padding()
-                .background(canStartShift ? Color.blue : Color.gray)
-                .foregroundColor(.white)
-                .cornerRadius(12)
-                .disabled(!canStartShift)
-
-                Spacer()
+                .disabled(odometerImage == nil || locationManager.latitude == nil)
             }
+
+            Button("Log Out") {
+                onLogout()
+            }
+            .foregroundColor(.red)
             .padding()
         }
-
-        // CAMERA
         .sheet(isPresented: $showCamera) {
-            ImagePicker(selectedImage: $odometerPhoto)
-        }
-
-        // KEYBOARD DONE
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button("Done") {
-                    fieldFocused = false
-                    notesFocused = false
-                }
-            }
-        }
-
-        .onTapGesture {
-            fieldFocused = false
-            notesFocused = false
+            ImagePicker(selectedImage: $odometerImage)
         }
     }
 }
+
+// MARK: - Active Shift
 struct ActiveShiftScreen: View {
     let assignmentName: String
     let shiftStartTime: Date
+
     var onEndShift: () -> Void
-    var onBackToLogin: () -> Void
+    var onLogout: () -> Void
 
-    @State private var noteText = ""
-    @State private var notes: [String] = []
-
-    @State private var showCamera = false
-    @State private var latestPhoto: UIImage?
     @State private var photos: [UIImage] = []
-
-    @FocusState private var noteFocused: Bool
+    @State private var showCamera = false
+    @State private var noteText = ""
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-
-                // HEADER
-                Text("Active Shift")
-                    .font(.title)
-                    .fontWeight(.bold)
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Assignment")
-                        .font(.headline)
-                        .foregroundColor(.secondary)
-
-                    Text(assignmentName.isEmpty ? "No assignment entered" : assignmentName)
-                        .font(.title3)
-                        .fontWeight(.semibold)
+        VStack {
+            Form {
+                Section(header: Text("Shift Info")) {
+                    Text("Assignment: \(assignmentName)")
+                    Text("Start: \(shiftStartTime.formatted())")
                 }
 
-                Text("Started: \(shiftStartTime.formatted(date: .omitted, time: .shortened))")
-                    .foregroundColor(.secondary)
+                Section(header: Text("Photos")) {
+                    if photos.isEmpty {
+                        Text("No photos yet")
+                    }
 
-                
-                // ADD PHOTO
-                Button("Add Photo") {
-                    showCamera = true
-                }
-                .frame(maxWidth: .infinity)
-                .padding()
-                .background(Color.blue.opacity(0.15))
-                .cornerRadius(10)
-                
-                
-                // FIELD NOTES
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Field Notes")
-                        .font(.headline)
-
-                    ZStack(alignment: .topLeading) {
-                        if noteText.isEmpty {
-                            Text("Enter note")
-                                .foregroundColor(.gray)
-                                .padding(.top, 14)
-                                .padding(.leading, 10)
-                        }
-
-                        TextEditor(text: $noteText)
+                    ForEach(photos, id: \.self) { img in
+                        Image(uiImage: img)
+                            .resizable()
+                            .scaledToFit()
                             .frame(height: 120)
-                            .padding(6)
-                            .focused($noteFocused)
                     }
-                    .background(Color.white)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10)
-                            .stroke(Color.gray.opacity(0.5))
-                    )
-                }
 
-               
-
-                // DIVIDER
-                Divider()
-                    .frame(height: 1)
-                    .background(Color.gray.opacity(0.3))
-
-                // SAVE NOTE
-                Button("Save Note") {
-                    let trimmed = noteText.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmed.isEmpty {
-                        notes.insert(
-                            "\(Date().formatted(date: .omitted, time: .shortened)) - \(trimmed)",
-                            at: 0
-                        )
-                        noteText = ""
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .padding()
-                .background(Color.gray.opacity(0.15))
-                .cornerRadius(10)
-
-                // CURRENT NOTES
-                if !notes.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Current Notes")
-                            .font(.headline)
-
-                        ForEach(notes, id: \.self) { note in
-                            Text("• \(note)")
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
+                    Button("Take Photo") {
+                        showCamera = true
                     }
                 }
 
-                // PHOTOS
-                if !photos.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Photos")
-                            .font(.headline)
-
-                        ForEach(Array(photos.enumerated()), id: \.offset) { _, image in
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFit()
-                                .frame(maxHeight: 200)
-                                .cornerRadius(10)
-                        }
-                    }
+                Section(header: Text("Notes")) {
+                    TextField("Enter notes...", text: $noteText)
                 }
 
-                // END SHIFT
-                Button("End Shift", action: onEndShift)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color.red)
-                    .foregroundColor(.white)
-                    .cornerRadius(10)
-
-                // BACK
-                Button("Back to Login", action: onBackToLogin)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color.black.opacity(0.08))
-                    .cornerRadius(10)
+                Button("End Shift") {
+                    onEndShift()
+                }
             }
+
+            Button("Log Out") {
+                onLogout()
+            }
+            .foregroundColor(.red)
             .padding()
         }
-        .navigationTitle("Active Shift")
-        .navigationBarTitleDisplayMode(.inline)
-
-        // CAMERA
         .sheet(isPresented: $showCamera) {
-            ImagePicker(selectedImage: $latestPhoto)
-        }
-
-        // SAVE PHOTO
-        .onChange(of: latestPhoto) { _, newValue in
-            if let newValue {
-                photos.insert(newValue, at: 0)
-                latestPhoto = nil
-            }
-        }
-
-        // KEYBOARD DONE BUTTON
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button("Done") {
-                    noteFocused = false
+            ImagePicker(selectedImage: Binding(
+                get: { nil },
+                set: { newImage in
+                    if let img = newImage {
+                        photos.append(img)
+                    }
                 }
-            }
-        }
-
-        .onTapGesture {
-            noteFocused = false
+            ))
         }
     }
 }
 
+// MARK: - End Shift
 struct EndShiftScreen: View {
-    @State private var showCamera = false
-    @State private var endPhoto: UIImage?
-    var onClockOut: () -> Void
+    var onSubmit: (_ lat: Double?, _ lon: Double?) -> Void
+    var onLogout: () -> Void
 
-    var canClockOut: Bool {
-        endPhoto != nil
-    }
+    @StateObject private var locationManager = LocationManager()
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                Text("End Shift")
-                    .font(.title)
-                    .fontWeight(.bold)
+        VStack {
+            Form {
+                Section(header: Text("Location")) {
+                    Text(locationManager.locationStatus)
 
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Ending Odometer Photo")
-                        .font(.headline)
-
-                    Button(endPhoto == nil ? "Take Odometer Photo" : "Retake Odometer Photo") {
-                        showCamera = true
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color.gray.opacity(0.15))
-                    .cornerRadius(12)
-
-                    if let image = endPhoto {
-                        Image(uiImage: image)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxHeight: 220)
-                            .cornerRadius(12)
+                    Button("Get Location") {
+                        locationManager.requestLocation()
                     }
                 }
 
-                Button("Clock Out", action: onClockOut)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(canClockOut ? Color.red : Color.gray)
-                    .foregroundColor(.white)
-                    .cornerRadius(12)
-                    .disabled(!canClockOut)
-
-                Spacer()
+                Button("Submit Shift") {
+                    onSubmit(locationManager.latitude, locationManager.longitude)
+                }
             }
+
+            Button("Log Out") {
+                onLogout()
+            }
+            .foregroundColor(.red)
             .padding()
-        }
-        .sheet(isPresented: $showCamera) {
-            ImagePicker(selectedImage: $endPhoto)
         }
     }
 }
