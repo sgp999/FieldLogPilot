@@ -1,6 +1,8 @@
 import SwiftUI
 import CoreLocation
 import Combine
+import UIKit
+import Foundation
 
 enum AppScreen {
     case roleSelection
@@ -15,6 +17,9 @@ enum UserRole {
     case fieldOperative
     case owner
 }
+
+
+
 
 // MARK: - Location Manager
 class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
@@ -83,6 +88,7 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 }
 
+
 // MARK: - Main View
 struct ContentView: View {
     @State private var currentScreen: AppScreen = .roleSelection
@@ -100,6 +106,9 @@ struct ContentView: View {
     @State private var isShiftActive = false
     @State private var shiftPhotos: [UIImage] = []
     @State private var shiftNotes = ""
+    @State private var activeShiftID: Int?
+    @State private var apiErrorMessage = ""
+    @State private var showAPIError = false
 
     var body: some View {
         NavigationStack {
@@ -134,11 +143,34 @@ struct ContentView: View {
                 StartShiftScreen(
                     assignmentName: $assignmentName,
                     onStartShift: { lat, lon in
-                        shiftStartTime = Date()
-                        startLatitude = lat
-                        startLongitude = lon
-                        isShiftActive = true
-                        currentScreen = .activeShift
+                        guard let lat, let lon else {
+                            apiErrorMessage = "Location is required to start a shift."
+                            showAPIError = true
+                            return
+                        }
+
+                        let trimmedAssignment = assignmentName.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !trimmedAssignment.isEmpty else {
+                            apiErrorMessage = "Assignment name is required."
+                            showAPIError = true
+                            return
+                        }
+
+                        let startTime = Date()
+                        API.startShift(lat: lat, lon: lon) { response in
+                            guard let response else {
+                                apiErrorMessage = "Unable to start shift on the backend."
+                                showAPIError = true
+                                return
+                            }
+
+                            shiftStartTime = startTime
+                            startLatitude = lat
+                            startLongitude = lon
+                            activeShiftID = response.id
+                            isShiftActive = true
+                            currentScreen = .activeShift
+                        }
                     },
                     onLogout: { resetApp() }
                 )
@@ -154,30 +186,50 @@ struct ContentView: View {
                     onEndShift: {
                         currentScreen = .endShift
                     },
-                    onLogout: { resetApp() }
+                    onLogout: { resetApp() },
+                    onViewOwner: {
+                        currentScreen = .ownerHome
+                    }
                 )
 
             case .endShift:
                 EndShiftScreen(
-                    onSubmit: { _, _ in
-                        isShiftActive = false
-                        resetApp()
+                    onSubmit: { lat, lon in
+                        guard let lat, let lon else {
+                            apiErrorMessage = "Ending location is required."
+                            showAPIError = true
+                            return
+                        }
+
+                        guard let activeShiftID else {
+                            apiErrorMessage = "No active shift ID found."
+                            showAPIError = true
+                            return
+                        }
+
+                        API.endShift(shiftId: activeShiftID, lat: lat, lon: lon) { success in
+                            if success {
+                                isShiftActive = false
+                                resetApp()
+                            } else {
+                                apiErrorMessage = "Unable to end shift on the backend."
+                                showAPIError = true
+                            }
+                        }
                     },
                     onLogout: { resetApp() }
                 )
 
             case .ownerHome:
                 OwnerHomeScreen(
-                    isShiftActive: isShiftActive,
-                    assignmentName: assignmentName,
-                    shiftStartTime: shiftStartTime,
-                    latitude: startLatitude,
-                    longitude: startLongitude,
-                    photos: shiftPhotos,
-                    notes: shiftNotes,
                     onLogout: { resetApp() }
                 )
             }
+        }
+        .alert("Backend Error", isPresented: $showAPIError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(apiErrorMessage)
         }
     }
 
@@ -185,10 +237,14 @@ struct ContentView: View {
         username = ""
         password = ""
         assignmentName = ""
+        shiftStartTime = Date()
         startLatitude = nil
         startLongitude = nil
         shiftPhotos = []
         shiftNotes = ""
+        activeShiftID = nil
+        apiErrorMessage = ""
+        showAPIError = false
         isShiftActive = false
         selectedRole = nil
         currentScreen = .roleSelection
@@ -265,6 +321,10 @@ struct LoginScreen: View {
                 onLogin()
             }
             .buttonStyle(.borderedProminent)
+            .disabled(
+                username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            )
 
             Spacer()
         }
@@ -383,6 +443,7 @@ struct ActiveShiftScreen: View {
 
     var onEndShift: () -> Void
     var onLogout: () -> Void
+    var onViewOwner: () -> Void
 
     @State private var showCamera = false
     @State private var latestPhoto: UIImage?
@@ -446,6 +507,11 @@ struct ActiveShiftScreen: View {
                     notesFocused = false
                     onEndShift()
                 }
+                Button("View Owner Dashboard") {
+                    notesFocused = false
+                    onViewOwner()
+                }
+                .buttonStyle(.bordered)
             }
             .scrollDismissesKeyboard(.interactively)
 
@@ -541,95 +607,202 @@ struct EndShiftScreen: View {
 
 // MARK: - Owner Screen
 struct OwnerHomeScreen: View {
-    let isShiftActive: Bool
-    let assignmentName: String
-    let shiftStartTime: Date
-    let latitude: Double?
-    let longitude: Double?
-    let photos: [UIImage]
-    let notes: String
-
     var onLogout: () -> Void
+
+    @State private var dashboard: OwnerDashboardResponse?
+    @State private var isLoading = false
 
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
-                Text("Owner Dashboard")
-                    .font(.largeTitle)
-                    .fontWeight(.bold)
+                HStack {
+                    Text("Owner Dashboard")
+                        .font(.title)
+                        .fontWeight(.bold)
 
-                if isShiftActive {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Status: Shift Active")
+                    Spacer()
+
+                    Button("Refresh") {
+                        loadDashboard()
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+
+                if !isLoading && dashboard == nil {
+                    VStack(spacing: 10) {
+                        Text("Unable to load dashboard")
                             .font(.headline)
 
-                        Text("Assignment: \(assignmentName)")
-                        Text("Start: \(shiftStartTime.formatted())")
+                        Text("Make sure the FastAPI backend is running and the /owner/dashboard endpoint is reachable.")
+                            .multilineTextAlignment(.center)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding()
+                    .frame(maxWidth: .infinity)
+                    .background(Color(.systemGray6))
+                    .cornerRadius(12)
+                }
 
-                        if let lat = latitude, let lon = longitude {
-                            HStack {
-                                Text("Lat:")
-                                    .fontWeight(.semibold)
-                                Text("\(lat, specifier: "%.6f")")
+                if isLoading {
+                    ProgressView("Loading...")
+                        .padding(.top, 30)
+                } else if let dashboard = dashboard, !dashboard.active_shifts.isEmpty {
+                    ForEach(dashboard.active_shifts) { shift in
+                        VStack(spacing: 16) {
 
-                                Spacer()
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Shift Status")
+                                    .font(.headline)
 
-                                Text("Lon:")
-                                    .fontWeight(.semibold)
-                                Text("\(lon, specifier: "%.6f")")
+                                HStack {
+                                    Text("Active")
+                                        .fontWeight(.bold)
+                                        .foregroundColor(.green)
+
+                                    Spacer()
+
+                                    Text(shift.status.capitalized)
+                                        .foregroundColor(.secondary)
+                                }
+
+                                Divider()
+
+                                Text("Assignment: \(shift.assignment_name)")
+                                Text("Start Time: \(shift.start_time)")
+
+                                HStack {
+                                    Text("Lat:")
+                                        .fontWeight(.semibold)
+                                    Text("\(shift.start_latitude, specifier: "%.6f")")
+
+                                    Spacer()
+
+                                    Text("Lon:")
+                                        .fontWeight(.semibold)
+                                    Text("\(shift.start_longitude, specifier: "%.6f")")
+                                }
                             }
-                        } else {
-                            Text("Location not available")
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
-                    .background(Color(.systemGray6))
-                    .cornerRadius(12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding()
+                            .background(Color(.systemGray6))
+                            .cornerRadius(12)
 
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Latest Photos")
-                            .font(.headline)
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Activity Summary")
+                                    .font(.headline)
 
-                        if photos.isEmpty {
-                            Text("No photos yet")
-                                .foregroundColor(.secondary)
-                        } else {
-                            ForEach(Array(photos.enumerated()), id: \.offset) { _, img in
-                                Image(uiImage: img)
-                                    .resizable()
-                                    .scaledToFit()
-                                    .frame(maxWidth: .infinity)
-                                    .cornerRadius(10)
+                                HStack {
+                                    VStack(alignment: .leading) {
+                                        Text("Notes")
+                                            .foregroundColor(.secondary)
+                                        Text("\(shift.notes.count)")
+                                            .font(.title2)
+                                            .fontWeight(.bold)
+                                    }
+
+                                    Spacer()
+
+                                    VStack(alignment: .leading) {
+                                        Text("Photos")
+                                            .foregroundColor(.secondary)
+                                        Text("\(shift.photos.count)")
+                                            .font(.title2)
+                                            .fontWeight(.bold)
+                                    }
+                                }
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding()
+                            .background(Color(.systemGray6))
+                            .cornerRadius(12)
+
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Latest Note")
+                                    .font(.headline)
+
+                                if let latestNote = shift.notes.last {
+                                    Text(latestNote.text)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                                    Text(latestNote.created_at)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                } else {
+                                    Text("No notes yet")
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding()
+                            .background(Color(.systemGray6))
+                            .cornerRadius(12)
+
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Latest Photo")
+                                    .font(.headline)
+
+                                if let latestPhoto = shift.photos.last {
+                                    AsyncImage(url: URL(string: latestPhoto.url)) { image in
+                                        image
+                                            .resizable()
+                                            .scaledToFit()
+                                            .cornerRadius(10)
+                                    } placeholder: {
+                                        ProgressView()
+                                            .frame(maxWidth: .infinity, minHeight: 120)
+                                    }
+
+                                    Text(latestPhoto.uploaded_at)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                } else {
+                                    Text("No photos yet")
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding()
+                            .background(Color(.systemGray6))
+                            .cornerRadius(12)
+
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("All Notes")
+                                    .font(.headline)
+
+                                if shift.notes.isEmpty {
+                                    Text("No notes yet")
+                                        .foregroundColor(.secondary)
+                                } else {
+                                    ForEach(shift.notes) { note in
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(note.text)
+                                            Text(note.created_at)
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        .padding(.vertical, 6)
+
+                                        Divider()
+                                    }
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding()
+                            .background(Color(.systemGray6))
+                            .cornerRadius(12)
                         }
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
-                    .background(Color(.systemGray6))
-                    .cornerRadius(12)
-
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Notes")
-                            .font(.headline)
-
-                        if notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            Text("No notes yet")
-                                .foregroundColor(.secondary)
-                        } else {
-                            Text(notes)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
-                    .background(Color(.systemGray6))
-                    .cornerRadius(12)
-
                 } else {
-                    Text("No active shifts")
-                        .foregroundColor(.secondary)
-                        .padding(.top, 40)
+                    VStack(spacing: 12) {
+                        Text("No Active Shifts")
+                            .font(.title2)
+                            .fontWeight(.semibold)
+
+                        Text("When a field operative starts a shift, it will appear here.")
+                            .multilineTextAlignment(.center)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.top, 40)
                 }
 
                 Button("Log Out") {
@@ -641,5 +814,18 @@ struct OwnerHomeScreen: View {
             .padding()
         }
         .navigationTitle("Owner")
+        .onAppear {
+            loadDashboard()
+        }
+    }
+
+    private func loadDashboard() {
+        isLoading = true
+        dashboard = nil
+
+        API.fetchOwnerDashboard { response in
+            dashboard = response
+            isLoading = false
+        }
     }
 }
