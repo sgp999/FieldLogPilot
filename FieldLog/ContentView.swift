@@ -107,6 +107,7 @@ struct ContentView: View {
     @State private var shiftPhotos: [UIImage] = []
     @State private var shiftNotes = ""
     @State private var activeShiftID: Int?
+    @State private var activeOperativeUsername = ""
     @State private var apiErrorMessage = ""
     @State private var showAPIError = false
 
@@ -157,7 +158,12 @@ struct ContentView: View {
                         }
 
                         let startTime = Date()
-                        API.startShift(lat: lat, lon: lon) { response in
+                        API.startShift(
+                            username: username,
+                            assignmentName: trimmedAssignment,
+                            lat: lat,
+                            lon: lon
+                        ) { response in
                             guard let response else {
                                 apiErrorMessage = "Unable to start shift on the backend."
                                 showAPIError = true
@@ -168,6 +174,7 @@ struct ContentView: View {
                             startLatitude = lat
                             startLongitude = lon
                             activeShiftID = response.id
+                            activeOperativeUsername = response.username
                             isShiftActive = true
                             currentScreen = .activeShift
                         }
@@ -178,6 +185,7 @@ struct ContentView: View {
             case .activeShift:
                 ActiveShiftScreen(
                     assignmentName: assignmentName,
+                    operativeUsername: activeOperativeUsername,
                     shiftStartTime: shiftStartTime,
                     startLatitude: startLatitude,
                     startLongitude: startLongitude,
@@ -237,6 +245,7 @@ struct ContentView: View {
         username = ""
         password = ""
         assignmentName = ""
+        activeOperativeUsername = ""
         shiftStartTime = Date()
         startLatitude = nil
         startLongitude = nil
@@ -432,11 +441,12 @@ struct StartShiftScreen: View {
 }
 
 // MARK: - Active Shift
-struct ActiveShiftScreen: View {
-    let assignmentName: String
-    let shiftStartTime: Date
-    let startLatitude: Double?
-    let startLongitude: Double?
+    struct ActiveShiftScreen: View {
+        let assignmentName: String
+        let operativeUsername: String
+        let shiftStartTime: Date
+        let startLatitude: Double?
+        let startLongitude: Double?
 
     @Binding var photos: [UIImage]
     @Binding var noteText: String
@@ -455,6 +465,7 @@ struct ActiveShiftScreen: View {
             Form {
                 Section(header: Text("Shift Info")) {
                     Text("Assignment: \(assignmentName)")
+                    Text("Operative: \(operativeUsername)")
                     Text("Start: \(shiftStartTime.formatted())")
 
                     if let lat = startLatitude, let lon = startLongitude {
@@ -668,6 +679,7 @@ struct OwnerHomeScreen: View {
                                 Divider()
 
                                 Text("Assignment: \(shift.assignment_name)")
+                                Text("Operative: \(shift.username)")
                                 Text("Start Time: \(shift.start_time)")
 
                                 HStack {

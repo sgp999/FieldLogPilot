@@ -6,6 +6,7 @@ let BASE_URL = "http://192.168.1.70:8000"
 // MARK: - Start Shift Response
 struct StartShiftResponse: Decodable, Sendable {
     let id: Int
+    let username: String
     let assignment_name: String
     let start_time: String
     let start_latitude: Double
@@ -26,6 +27,7 @@ struct OwnerDashboardResponse: Decodable, Sendable {
 
 struct ActiveShift: Decodable, Sendable, Identifiable {
     let id: Int
+    let username: String
     let assignment_name: String
     let start_time: String
     let start_latitude: Double
@@ -70,7 +72,13 @@ private struct EndShiftRequestBody: Encodable, Sendable {
 final class API {
 
     // MARK: Start Shift
-    static func startShift(lat: Double, lon: Double, completion: @escaping @MainActor (StartShiftResponse?) -> Void) {
+    static func startShift(
+        username: String,
+        assignmentName: String,
+        lat: Double,
+        lon: Double,
+        completion: @escaping @MainActor (StartShiftResponse?) -> Void
+    ) {
         guard let url = URL(string: "\(BASE_URL)/shifts/start") else {
             Task { @MainActor in completion(nil) }
             return
@@ -81,6 +89,8 @@ final class API {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         let body: [String: Any] = [
+            "username": username,
+            "assignment_name": assignmentName,
             "start_latitude": lat,
             "start_longitude": lon
         ]
@@ -99,7 +109,6 @@ final class API {
             }
         }.resume()
     }
-
     // MARK: Add Note
     static func addNote(shiftId: Int, text: String, completion: @escaping @MainActor (Bool) -> Void) {
         guard let url = URL(string: "\(BASE_URL)/shifts/\(shiftId)/notes") else {
