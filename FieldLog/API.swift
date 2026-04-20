@@ -1,7 +1,7 @@
 import Foundation
 import UIKit
 
-let BASE_URL = "http://192.168.1.70:8000"
+let BASE_URL = "http://Steves-MacBook-Air.local:8000"
 
 // MARK: - Start Shift Response
 struct StartShiftResponse: Decodable, Sendable {

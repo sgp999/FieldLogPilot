@@ -19,8 +19,6 @@ enum UserRole {
 }
 
 
-
-
 // MARK: - Location Manager
 class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     private let manager = CLLocationManager()
@@ -106,6 +104,7 @@ struct ContentView: View {
     @State private var isShiftActive = false
     @State private var shiftPhotos: [UIImage] = []
     @State private var shiftNotes = ""
+    @State private var lastSavedNoteText = ""
     @State private var activeShiftID: Int?
     @State private var activeOperativeUsername = ""
     @State private var apiErrorMessage = ""
@@ -175,6 +174,8 @@ struct ContentView: View {
                             startLongitude = lon
                             activeShiftID = response.id
                             activeOperativeUsername = response.username
+                            shiftNotes = ""
+                            lastSavedNoteText = ""
                             isShiftActive = true
                             currentScreen = .activeShift
                         }
@@ -197,6 +198,49 @@ struct ContentView: View {
                     onLogout: { resetApp() },
                     onViewOwner: {
                         currentScreen = .ownerHome
+                    },
+                    onSaveNote: { text in
+                        guard let activeShiftID else {
+                            apiErrorMessage = "No active shift ID found."
+                            showAPIError = true
+                            return
+                        }
+
+                        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !trimmedText.isEmpty else {
+                            apiErrorMessage = "Note cannot be empty."
+                            showAPIError = true
+                            return
+                        }
+
+                        guard trimmedText != lastSavedNoteText else {
+                            apiErrorMessage = "That note is already saved."
+                            showAPIError = true
+                            return
+                        }
+
+                        API.addNote(shiftId: activeShiftID, text: trimmedText) { success in
+                            if success {
+                                lastSavedNoteText = trimmedText
+                            } else {
+                                apiErrorMessage = "Unable to save note to the backend."
+                                showAPIError = true
+                            }
+                        }
+                    },
+                    onUploadPhoto: { image in
+                        guard let activeShiftID else {
+                            apiErrorMessage = "No active shift ID found."
+                            showAPIError = true
+                            return
+                        }
+
+                        API.uploadPhoto(shiftId: activeShiftID, image: image) { success in
+                            if !success {
+                                apiErrorMessage = "Unable to upload photo to the backend."
+                                showAPIError = true
+                            }
+                        }
                     }
                 )
 
@@ -251,6 +295,7 @@ struct ContentView: View {
         startLongitude = nil
         shiftPhotos = []
         shiftNotes = ""
+        lastSavedNoteText = ""
         activeShiftID = nil
         apiErrorMessage = ""
         showAPIError = false
@@ -271,23 +316,28 @@ struct RoleSelectionScreen: View {
                 .font(.title2)
                 .fontWeight(.semibold)
 
-            Text("Field Log")
-                .font(.largeTitle)
-                .fontWeight(.bold)
+            VStack(spacing: 60) {   // ← increase this number
+                Text("Field Log")
+                    .font(.largeTitle)
+                    .fontWeight(.bold)
 
-            Text("Select User Type")
-                .font(.title3)
-                .foregroundColor(.secondary)
-
-            Button("Field Operative") {
-                onSelectFieldOperative()
+                Text("Select User Type")
+                    .font(.title3)
+                    .foregroundColor(.secondary)
             }
-            .buttonStyle(.borderedProminent)
 
-            Button("Owner") {
-                onSelectOwner()
+            VStack(spacing: 40) {
+                Button("Field Operative") {
+                    onSelectFieldOperative()
+                }
+                .buttonStyle(.borderedProminent)
+                
+                Button("Owner") {
+                    onSelectOwner()
+                }
+                .frame(maxWidth: .infinity)
+                .buttonStyle(.borderedProminent)
             }
-            .buttonStyle(.bordered)
 
             Spacer()
         }
@@ -454,6 +504,8 @@ struct StartShiftScreen: View {
     var onEndShift: () -> Void
     var onLogout: () -> Void
     var onViewOwner: () -> Void
+    var onSaveNote: (String) -> Void
+    var onUploadPhoto: (UIImage) -> Void
 
     @State private var showCamera = false
     @State private var latestPhoto: UIImage?
@@ -512,6 +564,12 @@ struct StartShiftScreen: View {
                         RoundedRectangle(cornerRadius: 8)
                             .stroke(Color.gray.opacity(0.4), lineWidth: 1)
                     )
+
+                    Button("Save Note") {
+                        notesFocused = false
+                        onSaveNote(noteText)
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
 
                 Button("End Shift") {
@@ -536,6 +594,7 @@ struct StartShiftScreen: View {
         .sheet(isPresented: $showCamera, onDismiss: {
             if let photo = latestPhoto {
                 photos.append(photo)
+                onUploadPhoto(photo)
                 latestPhoto = nil
             }
         }) {
@@ -658,7 +717,7 @@ struct OwnerHomeScreen: View {
                     ProgressView("Loading...")
                         .padding(.top, 30)
                 } else if let dashboard = dashboard, !dashboard.active_shifts.isEmpty {
-                    ForEach(dashboard.active_shifts) { shift in
+                    ForEach(dashboard.active_shifts.sorted(by: { $0.start_time > $1.start_time })) { shift in
                         VStack(spacing: 16) {
 
                             VStack(alignment: .leading, spacing: 10) {
@@ -754,14 +813,29 @@ struct OwnerHomeScreen: View {
                                     .font(.headline)
 
                                 if let latestPhoto = shift.photos.last {
-                                    AsyncImage(url: URL(string: latestPhoto.url)) { image in
-                                        image
-                                            .resizable()
-                                            .scaledToFit()
-                                            .cornerRadius(10)
-                                    } placeholder: {
-                                        ProgressView()
+                                    AsyncImage(url: URL(string: latestPhoto.url)) { phase in
+                                        switch phase {
+                                        case .success(let image):
+                                            image
+                                                .resizable()
+                                                .scaledToFit()
+                                                .cornerRadius(10)
+                                        case .failure:
+                                            VStack(spacing: 8) {
+                                                Image(systemName: "photo")
+                                                    .font(.title)
+                                                    .foregroundColor(.secondary)
+                                                Text("Unable to load photo")
+                                                    .font(.caption)
+                                                    .foregroundColor(.secondary)
+                                            }
                                             .frame(maxWidth: .infinity, minHeight: 120)
+                                        case .empty:
+                                            ProgressView()
+                                                .frame(maxWidth: .infinity, minHeight: 120)
+                                        @unknown default:
+                                            EmptyView()
+                                        }
                                     }
 
                                     Text(latestPhoto.uploaded_at)
