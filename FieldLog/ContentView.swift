@@ -105,7 +105,7 @@ struct ContentView: View {
     @State private var shiftPhotos: [UIImage] = []
     @State private var shiftNotes = ""
     @State private var lastSavedNoteText = ""
-    @State private var activeShiftID: Int?
+    @State private var activeShiftID: String?
     @State private var activeOperativeUsername = ""
     @State private var apiErrorMessage = ""
     @State private var showAPIError = false
@@ -136,13 +136,19 @@ struct ContentView: View {
                         } else {
                             currentScreen = .startShift
                         }
+                    },
+                    onBackHome: {
+                        username = ""
+                        password = ""
+                        selectedRole = nil
+                        currentScreen = .roleSelection
                     }
                 )
 
             case .startShift:
                 StartShiftScreen(
                     assignmentName: $assignmentName,
-                    onStartShift: { lat, lon in
+                    onStartShift: { lat, lon, odometerImage in
                         guard let lat, let lon else {
                             apiErrorMessage = "Location is required to start a shift."
                             showAPIError = true
@@ -158,7 +164,7 @@ struct ContentView: View {
 
                         let startTime = Date()
                         API.startShift(
-                            username: username,
+                            operativeName: username,
                             assignmentName: trimmedAssignment,
                             lat: lat,
                             lon: lon
@@ -173,11 +179,22 @@ struct ContentView: View {
                             startLatitude = lat
                             startLongitude = lon
                             activeShiftID = response.id
-                            activeOperativeUsername = response.username
+                            activeOperativeUsername = response.operative_name
                             shiftNotes = ""
                             lastSavedNoteText = ""
                             isShiftActive = true
-                            currentScreen = .activeShift
+
+                            if let odometerImage {
+                                API.uploadPhoto(shiftId: response.id, image: odometerImage) { success in
+                                    if !success {
+                                        apiErrorMessage = "Shift started, but odometer photo failed to upload."
+                                        showAPIError = true
+                                    }
+                                    currentScreen = .activeShift
+                                }
+                            } else {
+                                currentScreen = .activeShift
+                            }
                         }
                     },
                     onLogout: { resetApp() }
@@ -185,6 +202,7 @@ struct ContentView: View {
 
             case .activeShift:
                 ActiveShiftScreen(
+                    activeShiftID: activeShiftID,
                     assignmentName: assignmentName,
                     operativeUsername: activeOperativeUsername,
                     shiftStartTime: shiftStartTime,
@@ -352,6 +370,7 @@ struct LoginScreen: View {
     @Binding var username: String
     @Binding var password: String
     var onLogin: () -> Void
+    var onBackHome: () -> Void
 
     var body: some View {
         VStack(spacing: 18) {
@@ -385,6 +404,11 @@ struct LoginScreen: View {
                 password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             )
 
+            Button("Back to Home") {
+                onBackHome()
+            }
+            .buttonStyle(.bordered)
+
             Spacer()
         }
         .padding(.top, 40)
@@ -397,7 +421,7 @@ struct LoginScreen: View {
 struct StartShiftScreen: View {
     @Binding var assignmentName: String
 
-    var onStartShift: (_ lat: Double?, _ lon: Double?) -> Void
+    var onStartShift: (_ lat: Double?, _ lon: Double?, _ odometerImage: UIImage?) -> Void
     var onLogout: () -> Void
 
     @StateObject private var locationManager = LocationManager()
@@ -467,7 +491,7 @@ struct StartShiftScreen: View {
 
                 Button("Start Shift") {
                     focusedField = false
-                    onStartShift(locationManager.latitude, locationManager.longitude)
+                    onStartShift(locationManager.latitude, locationManager.longitude, odometerImage)
                 }
                 .disabled(
                     odometerImage == nil ||
@@ -491,12 +515,13 @@ struct StartShiftScreen: View {
 }
 
 // MARK: - Active Shift
-    struct ActiveShiftScreen: View {
-        let assignmentName: String
-        let operativeUsername: String
-        let shiftStartTime: Date
-        let startLatitude: Double?
-        let startLongitude: Double?
+struct ActiveShiftScreen: View {
+    let activeShiftID: String?
+    let assignmentName: String
+    let operativeUsername: String
+    let shiftStartTime: Date
+    let startLatitude: Double?
+    let startLongitude: Double?
 
     @Binding var photos: [UIImage]
     @Binding var noteText: String
@@ -509,8 +534,27 @@ struct StartShiftScreen: View {
 
     @State private var showCamera = false
     @State private var latestPhoto: UIImage?
+    @StateObject private var locationManager = LocationManager()
+    @State private var trackingTimer = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
 
     @FocusState private var notesFocused: Bool
+
+    private func sendLiveLocationUpdate() {
+        guard let activeShiftID else { return }
+
+        locationManager.requestLocation()
+
+        guard let lat = locationManager.latitude,
+              let lon = locationManager.longitude else {
+            return
+        }
+
+        API.updateLocation(shiftId: activeShiftID, lat: lat, lon: lon) { success in
+            if !success {
+                print("Live location update failed")
+            }
+        }
+    }
 
     var body: some View {
         VStack {
@@ -590,6 +634,13 @@ struct StartShiftScreen: View {
             }
             .foregroundColor(.red)
             .padding()
+        }
+        .onAppear {
+            locationManager.requestLocation()
+            sendLiveLocationUpdate()
+        }
+        .onReceive(trackingTimer) { _ in
+            sendLiveLocationUpdate()
         }
         .sheet(isPresented: $showCamera, onDismiss: {
             if let photo = latestPhoto {
@@ -681,6 +732,20 @@ struct OwnerHomeScreen: View {
 
     @State private var dashboard: OwnerDashboardResponse?
     @State private var isLoading = false
+    @State private var ownerErrorMessage = ""
+    @State private var showOwnerError = false
+
+    private func fullPhotoURL(_ path: String) -> URL? {
+        if path.lowercased().hasPrefix("http://") || path.lowercased().hasPrefix("https://") {
+            return URL(string: path)
+        }
+
+        if path.hasPrefix("/") {
+            return URL(string: BASE_URL + path)
+        }
+
+        return URL(string: BASE_URL + "/" + path)
+    }
 
     var body: some View {
         ScrollView {
@@ -696,14 +761,28 @@ struct OwnerHomeScreen: View {
                         loadDashboard()
                     }
                     .buttonStyle(.borderedProminent)
+                    
+                    Button("Clear All") {
+                        API.clearAll { success in
+                            if success {
+                                loadDashboard()
+                            } else {
+                                ownerErrorMessage = "Unable to clear logs on the backend. Make sure /admin/clear-logs exists and the backend is running."
+                                showOwnerError = true
+                            }
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .foregroundColor(.red)
                 }
+                
 
                 if !isLoading && dashboard == nil {
                     VStack(spacing: 10) {
                         Text("Unable to load dashboard")
                             .font(.headline)
 
-                        Text("Make sure the FastAPI backend is running and the /owner/dashboard endpoint is reachable.")
+                        Text("Make sure the FastAPI backend is running and the /shifts/active endpoint is reachable.")
                             .multilineTextAlignment(.center)
                             .foregroundColor(.secondary)
                     }
@@ -717,7 +796,7 @@ struct OwnerHomeScreen: View {
                     ProgressView("Loading...")
                         .padding(.top, 30)
                 } else if let dashboard = dashboard, !dashboard.active_shifts.isEmpty {
-                    ForEach(dashboard.active_shifts.sorted(by: { $0.start_time > $1.start_time })) { shift in
+                    ForEach(dashboard.active_shifts.sorted(by: { $0.start_time > $1.start_time }), id: \.id) { shift in
                         VStack(spacing: 16) {
 
                             VStack(alignment: .leading, spacing: 10) {
@@ -738,19 +817,22 @@ struct OwnerHomeScreen: View {
                                 Divider()
 
                                 Text("Assignment: \(shift.assignment_name)")
-                                Text("Operative: \(shift.username)")
+                                Text("Operative: \(shift.operative_name)")
                                 Text("Start Time: \(shift.start_time)")
+                                Text("Latest Location")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
 
                                 HStack {
                                     Text("Lat:")
                                         .fontWeight(.semibold)
-                                    Text("\(shift.start_latitude, specifier: "%.6f")")
+                                    Text("\(shift.latest_latitude, specifier: "%.6f")")
 
                                     Spacer()
 
                                     Text("Lon:")
                                         .fontWeight(.semibold)
-                                    Text("\(shift.start_longitude, specifier: "%.6f")")
+                                    Text("\(shift.latest_longitude, specifier: "%.6f")")
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -809,11 +891,11 @@ struct OwnerHomeScreen: View {
                             .cornerRadius(12)
 
                             VStack(alignment: .leading, spacing: 10) {
-                                Text("Latest Photo")
+                                Text("Odometer Photo")
                                     .font(.headline)
 
-                                if let latestPhoto = shift.photos.last {
-                                    AsyncImage(url: URL(string: latestPhoto.url)) { phase in
+                                if let odometerPhoto = shift.photos.first {
+                                    AsyncImage(url: fullPhotoURL(odometerPhoto.url)) { phase in
                                         switch phase {
                                         case .success(let image):
                                             image
@@ -838,11 +920,54 @@ struct OwnerHomeScreen: View {
                                         }
                                     }
 
-                                    Text(latestPhoto.uploaded_at)
+                                    Text(odometerPhoto.uploaded_at)
                                         .font(.caption)
                                         .foregroundColor(.secondary)
                                 } else {
-                                    Text("No photos yet")
+                                    Text("No odometer photo yet")
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding()
+                            .background(Color(.systemGray6))
+                            .cornerRadius(12)
+
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Latest Surveillance Photo")
+                                    .font(.headline)
+
+                                if shift.photos.count > 1, let latestSurveillancePhoto = shift.photos.last {
+                                    AsyncImage(url: fullPhotoURL(latestSurveillancePhoto.url)) { phase in
+                                        switch phase {
+                                        case .success(let image):
+                                            image
+                                                .resizable()
+                                                .scaledToFit()
+                                                .cornerRadius(10)
+                                        case .failure:
+                                            VStack(spacing: 8) {
+                                                Image(systemName: "photo")
+                                                    .font(.title)
+                                                    .foregroundColor(.secondary)
+                                                Text("Unable to load photo")
+                                                    .font(.caption)
+                                                    .foregroundColor(.secondary)
+                                            }
+                                            .frame(maxWidth: .infinity, minHeight: 120)
+                                        case .empty:
+                                            ProgressView()
+                                                .frame(maxWidth: .infinity, minHeight: 120)
+                                        @unknown default:
+                                            EmptyView()
+                                        }
+                                    }
+
+                                    Text(latestSurveillancePhoto.uploaded_at)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                } else {
+                                    Text("No surveillance photos yet")
                                         .foregroundColor(.secondary)
                                 }
                             }
@@ -900,6 +1025,11 @@ struct OwnerHomeScreen: View {
             .padding()
         }
         .navigationTitle("Owner")
+        .alert("Clear All Failed", isPresented: $showOwnerError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(ownerErrorMessage)
+        }
         .onAppear {
             loadDashboard()
         }
