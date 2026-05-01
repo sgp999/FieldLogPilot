@@ -8,7 +8,7 @@
 import SwiftUI
 
 @main
-struct FieldLogApp: App {
+struct FieldLogPilotApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()

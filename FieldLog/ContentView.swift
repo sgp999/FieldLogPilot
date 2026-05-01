@@ -330,12 +330,12 @@ struct RoleSelectionScreen: View {
 
     var body: some View {
         VStack(spacing: 18) {
-            Text("Pierog Detective Agency")
+            Text("Agency")
                 .font(.title2)
                 .fontWeight(.semibold)
 
             VStack(spacing: 60) {   // ← increase this number
-                Text("Field Log")
+                Text("FieldLog Pilot")
                     .font(.largeTitle)
                     .fontWeight(.bold)
 
@@ -348,12 +348,6 @@ struct RoleSelectionScreen: View {
                 Button("Field Operative") {
                     onSelectFieldOperative()
                 }
-                .buttonStyle(.borderedProminent)
-                
-                Button("Owner") {
-                    onSelectOwner()
-                }
-                .frame(maxWidth: .infinity)
                 .buttonStyle(.borderedProminent)
             }
 
@@ -387,10 +381,9 @@ struct LoginScreen: View {
                 .foregroundColor(.secondary)
 
             VStack(spacing: 16) {
-                TextField("Username", text: $username)
+                TextField("Username (use demo)", text: $username)
                     .textFieldStyle(.roundedBorder)
-
-                SecureField("Password", text: $password)
+                SecureField("Password (use demo)", text: $password)
                     .textFieldStyle(.roundedBorder)
             }
             .padding(.horizontal)
@@ -620,11 +613,6 @@ struct ActiveShiftScreen: View {
                     notesFocused = false
                     onEndShift()
                 }
-                Button("View Owner Dashboard") {
-                    notesFocused = false
-                    onViewOwner()
-                }
-                .buttonStyle(.bordered)
             }
             .scrollDismissesKeyboard(.interactively)
 
