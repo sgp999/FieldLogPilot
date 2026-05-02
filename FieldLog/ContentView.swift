@@ -92,8 +92,8 @@ struct ContentView: View {
     @State private var currentScreen: AppScreen = .roleSelection
     @State private var selectedRole: UserRole? = nil
 
-    @State private var username = ""
-    @State private var password = ""
+    @State private var username = "demo"
+    @State private var password = "demo"
 
     @State private var assignmentName = ""
     @State private var shiftStartTime = Date()
@@ -138,8 +138,8 @@ struct ContentView: View {
                         }
                     },
                     onBackHome: {
-                        username = ""
-                        password = ""
+                        username = "demo"
+                        password = "demo"
                         selectedRole = nil
                         currentScreen = .roleSelection
                     }
@@ -296,8 +296,8 @@ struct ContentView: View {
     }
 
     func resetApp() {
-        username = ""
-        password = ""
+        username = "demo"
+        password = "demo"
         assignmentName = ""
         activeOperativeUsername = ""
         shiftStartTime = Date()
@@ -360,9 +360,6 @@ struct LoginScreen: View {
 
     var body: some View {
         VStack(spacing: 18) {
-            Text("Pierog Detective Agency")
-                .font(.title2)
-                .fontWeight(.semibold)
 
             Text("Field Log")
                 .font(.largeTitle)
@@ -598,6 +595,7 @@ struct ActiveShiftScreen: View {
                         onSaveNote(noteText)
                     }
                     .buttonStyle(.borderedProminent)
+                    .disabled(noteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
 
                 Button("End Shift") {
