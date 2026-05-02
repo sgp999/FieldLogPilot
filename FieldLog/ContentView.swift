@@ -184,17 +184,9 @@ struct ContentView: View {
                             lastSavedNoteText = ""
                             isShiftActive = true
 
-                            if let odometerImage {
-                                API.uploadPhoto(shiftId: response.id, image: odometerImage) { success in
-                                    if !success {
-                                        apiErrorMessage = "Shift started, but odometer photo failed to upload."
-                                        showAPIError = true
-                                    }
-                                    currentScreen = .activeShift
-                                }
-                            } else {
-                                currentScreen = .activeShift
-                            }
+                            // Odometer photo is optional for now.
+                            // Do not block Start Shift or show an error if photo upload fails.
+                            currentScreen = .activeShift
                         }
                     },
                     onLogout: { resetApp() }
@@ -487,7 +479,6 @@ struct StartShiftScreen: View {
                     onStartShift(locationManager.latitude, locationManager.longitude, odometerImage)
                 }
                 .disabled(
-                    odometerImage == nil ||
                     locationManager.latitude == nil ||
                     locationManager.longitude == nil
                 )
